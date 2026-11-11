@@ -99,11 +99,7 @@ cd apps/mobile/android && ./gradlew assembleDebug   # Android APK
 - **Fees are never hardcoded.** All fee math derives from `packages/shared/src/payment/platform-fees.ts`.
 - **The escrow service is frozen as a demo** (`apps/web/src/lib/escrow/escrow-service.ts`). Production would replace it with real chain calls behind the same interface.
 
-## Security
 
-- Secrets (service-account keys, `.env*`, mobile Firebase config) are gitignored — see `.gitignore`.
-- The Firebase **client** API key is an identifier, not a secret (access is enforced by Firestore security rules); still, restrict it in Google Cloud Console → Credentials (HTTP referrers / Android app restriction) for defense in depth.
-- Firestore rules enforce participant-scoped access; privileged fields (`role`, `kycStatus`, `fraudScore`, verification status) are server-controlled only.
 
 ## License
 

@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isImageOrPdf() {
+      return request.resource.contentType.matches('image/.*')
+        || request.resource.contentType == 'application/pdf';
+    }
+
+    // KYC documents: owner-only read/write. 10MB max, image or pdf.
+    // NOTE: admin read access was removed when the `isAdmin()` helper was
+    // removed (Day 3). Re-add admin access when Storage is reinitialized and
+    // KYC compliance flows are implemented.
+    match /kyc/{userId}/{file=**} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+
+      allow write: if isSignedIn()
+                    && request.auth.uid == userId
+                    && request.resource.size < 10 * 1024 * 1024
+                    && isImageOrPdf();
+    }
+
+    // Gig assets: writable by the gig's freelancer; public read. 5MB, image only.
+    match /gigs/{gigId}/{file=**} {
+      allow read: if true;
+
+      allow write: if isSignedIn()
+                    && firestore.exists(/databases/(default)/documents/gigs/$(gigId))
+                    && firestore.get(/databases/(default)/documents/gigs/$(gigId)).data.freelancerId == request.auth.uid
+                    && request.resource.size < 5 * 1024 * 1024
+                    && isImage();
+    }
+
+    // Avatars: writable by owner only; public read. 2MB, image only.
+    match /avatars/{userId}/{file=**} {
+      allow read: if true;
+
+      allow write: if isSignedIn()
+                    && request.auth.uid == userId
+                    && request.resource.size < 2 * 1024 * 1024
+                    && isImage();
+    }
+  }
+}

@@ -1,0 +1,15 @@
+diff --git a/common/cpp/react/renderer/components/rnsvg/RNSVGLayoutableShadowNode.cpp b/common/cpp/react/renderer/components/rnsvg/RNSVGLayoutableShadowNode.cpp
+index e0341ec6b39d249d1b8983b83180555c58971928..ded9989570d6b795fb2a021b4fb19f906081ddff 100644
+--- a/common/cpp/react/renderer/components/rnsvg/RNSVGLayoutableShadowNode.cpp
++++ b/common/cpp/react/renderer/components/rnsvg/RNSVGLayoutableShadowNode.cpp
+@@ -28,8 +28,8 @@ void RNSVGLayoutableShadowNode::updatePosition() {
+   auto style = yogaNode_.style();
+   style.setPositionType(yoga::PositionType::Absolute);
+   style.setPosition(yoga::Edge::All, yoga::Style::Length::points(0));
+-  style.setDimension(yoga::Dimension::Width, yoga::StyleSizeLength::percent(100));
+-  style.setDimension(yoga::Dimension::Height, yoga::StyleSizeLength::percent(100));
++  style.setDimension(yoga::Dimension::Width, yoga::StyleLength::percent(100));
++  style.setDimension(yoga::Dimension::Height, yoga::StyleLength::percent(100));
+   yogaNode_.setStyle(style);
+ }
+ 

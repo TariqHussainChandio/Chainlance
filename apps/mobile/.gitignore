@@ -1,0 +1,27 @@
+# React Native
+node_modules/
+
+# Android builds
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+*.keystore
+!debug.keystore
+*.hprof
+
+# iOS builds
+ios/Pods/
+ios/build/
+ios/DerivedData/
+*.xcworkspace/xcuserdata/
+
+# Metro / bundler
+.metro-health-check*
+*.jsbundle
+
+# Misc
+*.apk
+*.aab
+.DS_Store

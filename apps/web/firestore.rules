@@ -1,0 +1,265 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Fields that non-admin readers must not be able to request directly.
+    // Note: Firestore rules cannot redact individual fields on read; the
+    // server-side maskUserForRole() helper in lib/firebase/data-masking.ts
+    // handles field-level masking for all server-rendered reads.
+    // The rule below restricts who can read the full document at all.
+
+    // USERS: own doc readable in full; others can read non-sensitive public
+    // fields only (enforced via the data-masking helper server-side, not here
+    // because Firestore rules cannot strip fields). Admins read everything.
+    match /users/{uid} {
+      // Self or admin can read the full record; other signed-in users get access
+      // too (needed for freelancer/client browsing), but sensitive fields are
+      // stripped server-side by maskUserForRole().
+      allow read: if isSignedIn();
+
+      // Creation: only self, and role must NOT be 'admin' (admins are server-side only).
+      allow create: if isSelf(uid)
+                    && request.resource.data.uid == uid
+                    && request.resource.data.role in ['freelancer', 'client'];
+
+      // Update: self or admin. Self cannot touch privileged fields —
+      // role/uid are immutable and kycStatus / fraudScore / verificationStatus
+      // are server-controlled (admin SDK or admin rule branch only).
+      allow update: if (
+                      isSelf(uid)
+                      && !request.resource.data.diff(resource.data).affectedKeys()
+                           .hasAny(['role', 'uid', 'kycStatus', 'fraudScore', 'verificationStatus'])
+                    ) || isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+    // GIGS: published readable by anyone; drafts by owner/admin; writes only by owning freelancer.
+    match /gigs/{gigId} {
+      allow read: if resource.data.status == 'published'
+                  || (isSignedIn() && resource.data.freelancerId == request.auth.uid)
+                  || isAdmin();
+
+      allow create: if isSignedIn()
+                    && request.resource.data.freelancerId == request.auth.uid;
+
+      allow update: if isSignedIn()
+                    && resource.data.freelancerId == request.auth.uid
+                    && request.resource.data.freelancerId == resource.data.freelancerId;
+
+      allow delete: if isSignedIn()
+                    && resource.data.freelancerId == request.auth.uid;
+    }
+
+    // CONTRACTS: readable by client, freelancer, or admin.
+    match /contracts/{contractId} {
+      function isParticipant() {
+        return isSignedIn() && (
+          resource.data.clientId == request.auth.uid
+          || resource.data.freelancerId == request.auth.uid
+        );
+      }
+
+      allow read: if isParticipant() || isAdmin();
+
+      // Client creates the contract.
+      allow create: if isSignedIn()
+                    && request.resource.data.clientId == request.auth.uid;
+
+      // Both participants can update; clientId and freelancerId are immutable.
+      allow update: if (
+                      isParticipant()
+                      && request.resource.data.clientId == resource.data.clientId
+                      && request.resource.data.freelancerId == resource.data.freelancerId
+                    ) || isAdmin();
+
+      allow delete: if isAdmin();
+
+      // Milestones: readable by participants. Clients may CREATE the initial
+      // pending milestones (proposal-acceptance flow runs client-side), but
+      // all lifecycle transitions (delivered/approved/completed/disputed,
+      // holds, payouts) go through server actions / the API — the admin SDK
+      // bypasses these rules, so direct client mutation stays denied.
+      match /milestones/{milestoneId} {
+        function parentContract() {
+          return get(/databases/$(database)/documents/contracts/$(contractId)).data;
+        }
+        function isContractParticipant() {
+          return isSignedIn() && (
+            parentContract().clientId == request.auth.uid
+            || parentContract().freelancerId == request.auth.uid
+          );
+        }
+
+        allow read: if isContractParticipant() || isAdmin();
+        allow create: if (isContractParticipant() || isAdmin())
+                      && request.resource.data.status == 'pending';
+        allow update, delete: if isAdmin();
+      }
+
+      // Transactions: read by participants/admin; client writes denied (server only).
+      match /transactions/{txId} {
+        function parentContract() {
+          return get(/databases/$(database)/documents/contracts/$(contractId)).data;
+        }
+        function isContractParticipant() {
+          return isSignedIn() && (
+            parentContract().clientId == request.auth.uid
+            || parentContract().freelancerId == request.auth.uid
+          );
+        }
+
+        allow read: if isContractParticipant() || isAdmin();
+        allow write: if false;
+      }
+
+      // Messages: read/write by participants only; senderId must match auth.uid on create.
+      match /messages/{messageId} {
+        function parentContract() {
+          return get(/databases/$(database)/documents/contracts/$(contractId)).data;
+        }
+        function isContractParticipant() {
+          return isSignedIn() && (
+            parentContract().clientId == request.auth.uid
+            || parentContract().freelancerId == request.auth.uid
+          );
+        }
+
+        allow read: if isContractParticipant();
+
+        allow create: if isContractParticipant()
+                      && request.resource.data.senderId == request.auth.uid;
+
+        // Allow marking as read (updating readAt) by the other participant.
+        allow update: if isContractParticipant();
+
+        allow delete: if isAdmin();
+      }
+    }
+
+    // REVIEWS: readable by anyone; writable by authenticated user with matching reviewerId.
+    match /reviews/{reviewId} {
+      allow read: if true;
+
+      allow create: if isSignedIn()
+                    && request.resource.data.reviewerId == request.auth.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // FRAUD ALERTS: admin-only.
+    match /fraudAlerts/{alertId} {
+      allow read, write: if isAdmin();
+    }
+
+    // KYC SUBMISSIONS: owner can read/create; only admins can update.
+    match /kycSubmissions/{submissionId} {
+      allow read: if isAdmin()
+                  || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn()
+                    && request.resource.data.userId == request.auth.uid;
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+    // ADMIN AUDIT LOG: read-only for admins, writes only from server (admin SDK).
+    match /adminAuditLog/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // PROPOSALS: participants only. The submitting freelancer must be the
+    // authenticated caller; participant ids are immutable on update.
+    match /proposals/{proposalId} {
+      allow read: if isSignedIn() && (
+        resource.data.clientId == request.auth.uid
+        || resource.data.freelancerId == request.auth.uid
+        || isAdmin()
+      );
+
+      allow create: if isSignedIn()
+                    && request.resource.data.freelancerId == request.auth.uid;
+
+      allow update: if isSignedIn() && (
+        (
+          (resource.data.clientId == request.auth.uid
+            || resource.data.freelancerId == request.auth.uid)
+          && request.resource.data.clientId == resource.data.clientId
+          && request.resource.data.freelancerId == resource.data.freelancerId
+        )
+        || isAdmin()
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // NOTIFICATIONS: read/update/delete by recipient or admin. Create stays
+    // open to signed-in users because client flows (proposal submitted,
+    // connection request) notify the counterparty directly — but the shape is
+    // validated: a recipient, non-empty title, and read must start false.
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn()
+                  && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn()
+                    && request.resource.data.userId is string
+                    && request.resource.data.userId.size() > 0
+                    && request.resource.data.title is string
+                    && request.resource.data.read == false;
+
+      allow update: if isSignedIn()
+                    && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow delete: if isSignedIn()
+                    && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // CONNECTIONS: only the two participants named on the document (or admin)
+    // can read or write it; the creator must be one of the participants.
+    match /connections/{id} {
+      function isConnectionParty() {
+        return isSignedIn() && (
+          resource.data.clientId == request.auth.uid
+          || resource.data.freelancerId == request.auth.uid
+        );
+      }
+
+      allow read: if isConnectionParty() || isAdmin();
+
+      allow create: if isSignedIn() && (
+        request.resource.data.clientId == request.auth.uid
+        || request.resource.data.freelancerId == request.auth.uid
+      );
+
+      allow update: if isConnectionParty() || isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+    // TRANSACTIONS (top-level wallet ledger: deposits + withdrawals): owner
+    // or admin may read; all writes happen server-side via the admin SDK.
+    match /transactions/{txId} {
+      allow read: if isSignedIn()
+                  && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+  }
+}
